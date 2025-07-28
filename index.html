@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hand‑Controlled AR Model Viewer (v8)</title>
+  <title>Hand‑Controlled AR Model Viewer (Auto Load)</title>
   <!-- Import map to resolve Three.js module specifiers -->
   <script type="importmap">
     {
@@ -68,12 +68,8 @@
       border-radius: 4px;
       color: #fff;
     }
-    #controls input[type=file] {
-      color: #fff;
-      margin-top: 4px;
-    }
     #info {
-      margin-top: 6px;
+      margin-top: 4px;
       font-size: 14px;
     }
   </style>
@@ -84,9 +80,7 @@
     <canvas id="threeCanvas"></canvas>
     <canvas id="overlayCanvas"></canvas>
     <div id="controls">
-      <label for="filesInput">OBJ + 텍스쳐 선택 (여러 파일 가능):</label><br/>
-      <input type="file" id="filesInput" accept=".obj,.mtl,.jpg,.jpeg,.png" multiple />
-      <div id="info">카메라 접근을 허용해 주세요.</div>
+      <div id="info">모델과 텍스처를 자동으로 로드합니다.</div>
     </div>
   </div>
   <script type="module">
@@ -97,7 +91,6 @@
     const videoElement = document.getElementById('videoElement');
     const threeCanvas = document.getElementById('threeCanvas');
     const overlayCanvas = document.getElementById('overlayCanvas');
-    const filesInput = document.getElementById('filesInput');
     const infoEl = document.getElementById('info');
     const overlayCtx = overlayCanvas.getContext('2d');
 
@@ -118,7 +111,6 @@
     let targetRotX = 0;
     let targetRotY = 0;
     let targetScale = 1;
-    // Previous values for relative control
     let prevHandRotX = null;
     let prevHandRotY = null;
 
@@ -144,69 +136,52 @@
     window.addEventListener('resize', handleResize);
     handleResize();
 
-    // Texture loader for local files
-    function loadTextureFromFile(file) {
-      return new Promise((resolve) => {
-        const url = URL.createObjectURL(file);
-        const loader = new THREE.TextureLoader();
-        loader.load(url, (texture) => {
-          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-          texture.encoding = THREE.sRGBEncoding;
-          resolve(texture);
-        });
-      });
-    }
-
-    filesInput.addEventListener('change', async (ev) => {
-      const files = Array.from(ev.target.files);
-      const objFile = files.find(f => f.name.toLowerCase().endsWith('.obj'));
-      if (!objFile) {
-        infoEl.textContent = 'OBJ 파일을 선택하세요.';
-        return;
-      }
-      let baseTexFile = null;
-      let normalTexFile = null;
-      let metalTexFile = null;
-      let roughTexFile = null;
-      for (const file of files) {
-        const name = file.name.toLowerCase();
-        if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) {
-          if (name.includes('normal') && !normalTexFile) normalTexFile = file;
-          else if ((name.includes('metal') || name.includes('metallic')) && !metalTexFile) metalTexFile = file;
-          else if (name.includes('rough') && !roughTexFile) roughTexFile = file;
-          else if (!baseTexFile) baseTexFile = file;
-        }
-      }
-      // Read OBJ
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const contents = e.target.result;
+    // Load model and textures automatically
+    async function loadDefaultModel() {
+      try {
+        // Define file names (must exist in the same directory as this HTML)
+        const objUrl = 'tripo_convert_82cea090-6813-43f2-a343-2a173d03f37d.obj';
+        const baseTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_0.jpg';
+        const normalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_2.jpg';
+        const metalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Metallic.jpg';
+        const roughTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Roughness.jpg';
+        // Load OBJ file via fetch
+        const objResponse = await fetch(objUrl);
+        const objText = await objResponse.text();
         const loader = new OBJLoader();
-        const object = loader.parse(contents);
+        const object = loader.parse(objText);
         // Load textures
-        const texPromises = [];
-        let baseTex = null;
-        let normalTex = null;
-        let metalTex = null;
-        let roughTex = null;
-        if (baseTexFile) texPromises.push(loadTextureFromFile(baseTexFile).then(t => baseTex = t));
-        if (normalTexFile) texPromises.push(loadTextureFromFile(normalTexFile).then(t => normalTex = t));
-        if (metalTexFile) texPromises.push(loadTextureFromFile(metalTexFile).then(t => metalTex = t));
-        if (roughTexFile) texPromises.push(loadTextureFromFile(roughTexFile).then(t => roughTex = t));
-        await Promise.all(texPromises);
+        const textureLoader = new THREE.TextureLoader();
+        const baseTexPromise = textureLoader.loadAsync(baseTexUrl);
+        const normalTexPromise = textureLoader.loadAsync(normalTexUrl);
+        const metalTexPromise = textureLoader.loadAsync(metalTexUrl);
+        const roughTexPromise = textureLoader.loadAsync(roughTexUrl);
+        const [baseTex, normalTex, metalTex, roughTex] = await Promise.all([
+          baseTexPromise,
+          normalTexPromise,
+          metalTexPromise,
+          roughTexPromise
+        ]);
+        baseTex.wrapS = baseTex.wrapT = THREE.RepeatWrapping;
+        normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping;
+        metalTex.wrapS = metalTex.wrapT = THREE.RepeatWrapping;
+        roughTex.wrapS = roughTex.wrapT = THREE.RepeatWrapping;
+        baseTex.encoding = normalTex.encoding = metalTex.encoding = roughTex.encoding = THREE.sRGBEncoding;
         // Apply material
         object.traverse((child) => {
           if (child.isMesh) {
             const mat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-            if (baseTex) mat.map = baseTex;
-            if (normalTex) mat.normalMap = normalTex;
-            if (metalTex) { mat.metalnessMap = metalTex; mat.metalness = 1.0; }
-            if (roughTex) { mat.roughnessMap = roughTex; mat.roughness = 1.0; }
+            mat.map = baseTex;
+            mat.normalMap = normalTex;
+            mat.metalnessMap = metalTex;
+            mat.metalness = 1.0;
+            mat.roughnessMap = roughTex;
+            mat.roughness = 1.0;
             mat.needsUpdate = true;
             child.material = mat;
           }
         });
-        // Center and scale
+        // Center, scale and orient the model
         const box = new THREE.Box3().setFromObject(object);
         const size = new THREE.Vector3();
         box.getSize(size);
@@ -217,15 +192,17 @@
         box.getCenter(center);
         center.multiplyScalar(scaleFactor);
         object.position.set(-center.x, -center.y, -center.z);
-        // Default orientation: flip 180 degrees
+        // Rotate 180 degrees around Y
         object.rotation.y = Math.PI;
         if (currentModel) modelGroup.remove(currentModel);
         currentModel = object;
         modelGroup.add(object);
-        infoEl.textContent = '모델이 로드되었습니다. 주먹을 쥐어 회전/크기 조절해 보세요!';
-      };
-      reader.readAsText(objFile);
-    });
+        infoEl.textContent = '모델이 자동으로 로드되었습니다. 주먹을 쥐어 회전/크기 조절하세요.';
+      } catch (err) {
+        console.error(err);
+        infoEl.textContent = '모델 로드에 실패했습니다.';
+      }
+    }
 
     function computeHandRotation(landmarks) {
       const wrist = landmarks[0];
@@ -257,17 +234,12 @@
       return size * 8; // tune factor: bigger factor yields bigger scale
     }
     function isFist(landmarks) {
-      // Determine if most fingers are folded; check index, middle, ring, pinky
       let foldedCount = 0;
-      // index finger: tip 8, pip 6
       if (landmarks[8].y > landmarks[6].y) foldedCount++;
-      // middle finger: tip 12, pip 10
       if (landmarks[12].y > landmarks[10].y) foldedCount++;
-      // ring finger: tip 16, pip 14
       if (landmarks[16].y > landmarks[14].y) foldedCount++;
-      // pinky: tip 20, pip 18
       if (landmarks[20].y > landmarks[18].y) foldedCount++;
-      return foldedCount >= 3; // treat as fist if 3 or more fingers folded
+      return foldedCount >= 3;
     }
 
     async function setupHandTracking() {
@@ -284,7 +256,6 @@
           drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
           drawLandmarks(overlayCtx, landmarks, { color: '#FF0000', lineWidth: 2 });
           if (isFist(landmarks)) {
-            // Update rotation
             const { rotX, rotY } = computeHandRotation(landmarks);
             if (prevHandRotX !== null && prevHandRotY !== null) {
               targetRotX += (rotX - prevHandRotX);
@@ -292,19 +263,16 @@
             }
             prevHandRotX = rotX;
             prevHandRotY = rotY;
-            // Update scale based on hand size only while fist is held
             let newScale = computeScaleFromSize(landmarks);
             newScale = Math.max(0.4, Math.min(3.0, newScale));
             targetScale = newScale;
             infoEl.textContent = '주먹을 쥐고 있어요: 회전/크기 조절 중...';
           } else {
-            // Not fist: stop updating rotation/scale, reset prev rotation values
             prevHandRotX = null;
             prevHandRotY = null;
             infoEl.textContent = '손을 펴면 모델이 고정됩니다.';
           }
         } else {
-          // No hand: reset
           prevHandRotX = null;
           prevHandRotY = null;
           infoEl.textContent = '손을 화면에 보여주세요.';
@@ -321,7 +289,8 @@
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         videoElement.srcObject = stream;
         await videoElement.play();
-        infoEl.textContent = '모델을 로드한 뒤 주먹으로 회전/크기 조절하세요.';
+        await loadDefaultModel();
+        infoEl.textContent = '주먹을 쥐어 회전/크기 조절하세요.';
         await setupHandTracking();
       } catch (err) {
         console.error(err);
