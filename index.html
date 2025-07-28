@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hand‑Controlled AR Model Viewer (Auto Load)</title>
+  <title>Hand‑Controlled AR Model Viewer — Face Control</title>
   <!-- Import map to resolve Three.js module specifiers -->
   <script type="importmap">
     {
@@ -13,8 +13,8 @@
       }
     }
   </script>
-  <!-- MediaPipe Hands and drawing utils -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" defer></script>
+  <!-- MediaPipe Face Mesh and drawing utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" defer></script>
   <style>
     html, body {
@@ -80,7 +80,7 @@
     <canvas id="threeCanvas"></canvas>
     <canvas id="overlayCanvas"></canvas>
     <div id="controls">
-      <div id="info">모델과 텍스처를 자동으로 로드합니다.</div>
+      <div id="info">얼굴이 감지되면 자동으로 로드됩니다.</div>
     </div>
   </div>
   <script type="module">
@@ -108,15 +108,17 @@
     const modelGroup = new THREE.Group();
     scene.add(modelGroup);
     let currentModel = null;
-    let targetRotX = 0;
-    let targetRotY = 0;
+    let targetRotY = 0; // Only y-axis rotation will be updated
+    const FIXED_ROT_X = 0;
+    const FIXED_ROT_Z = 0;
     let targetScale = 1;
-    let prevHandRotX = null;
-    let prevHandRotY = null;
+    let prevYaw = null;
 
     function animate() {
       requestAnimationFrame(animate);
-      modelGroup.rotation.x += (targetRotX - modelGroup.rotation.x) * 0.2;
+      // Apply fixed rotations on X and Z, update only Y gradually
+      modelGroup.rotation.x = FIXED_ROT_X;
+      modelGroup.rotation.z = FIXED_ROT_Z;
       modelGroup.rotation.y += (targetRotY - modelGroup.rotation.y) * 0.2;
       const curScale = modelGroup.scale.x;
       modelGroup.scale.setScalar(curScale + (targetScale - curScale) * 0.2);
@@ -136,38 +138,29 @@
     window.addEventListener('resize', handleResize);
     handleResize();
 
-    // Load model and textures automatically
+    // Load default model and textures (same files as index_autoload.html)
     async function loadDefaultModel() {
       try {
-        // Define file names (must exist in the same directory as this HTML)
         const objUrl = 'tripo_convert_82cea090-6813-43f2-a343-2a173d03f37d.obj';
         const baseTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_0.jpg';
         const normalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_2.jpg';
         const metalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Metallic.jpg';
         const roughTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Roughness.jpg';
-        // Load OBJ file via fetch
         const objResponse = await fetch(objUrl);
         const objText = await objResponse.text();
         const loader = new OBJLoader();
         const object = loader.parse(objText);
-        // Load textures
         const textureLoader = new THREE.TextureLoader();
-        const baseTexPromise = textureLoader.loadAsync(baseTexUrl);
-        const normalTexPromise = textureLoader.loadAsync(normalTexUrl);
-        const metalTexPromise = textureLoader.loadAsync(metalTexUrl);
-        const roughTexPromise = textureLoader.loadAsync(roughTexUrl);
         const [baseTex, normalTex, metalTex, roughTex] = await Promise.all([
-          baseTexPromise,
-          normalTexPromise,
-          metalTexPromise,
-          roughTexPromise
+          textureLoader.loadAsync(baseTexUrl),
+          textureLoader.loadAsync(normalTexUrl),
+          textureLoader.loadAsync(metalTexUrl),
+          textureLoader.loadAsync(roughTexUrl)
         ]);
-        baseTex.wrapS = baseTex.wrapT = THREE.RepeatWrapping;
-        normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping;
-        metalTex.wrapS = metalTex.wrapT = THREE.RepeatWrapping;
-        roughTex.wrapS = roughTex.wrapT = THREE.RepeatWrapping;
-        baseTex.encoding = normalTex.encoding = metalTex.encoding = roughTex.encoding = THREE.sRGBEncoding;
-        // Apply material
+        [baseTex, normalTex, metalTex, roughTex].forEach(tex => {
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.encoding = THREE.sRGBEncoding;
+        });
         object.traverse((child) => {
           if (child.isMesh) {
             const mat = new THREE.MeshStandardMaterial({ color: 0xffffff });
@@ -181,7 +174,6 @@
             child.material = mat;
           }
         });
-        // Center, scale and orient the model
         const box = new THREE.Box3().setFromObject(object);
         const size = new THREE.Vector3();
         box.getSize(size);
@@ -192,106 +184,94 @@
         box.getCenter(center);
         center.multiplyScalar(scaleFactor);
         object.position.set(-center.x, -center.y, -center.z);
-        // Rotate 180 degrees around Y
         object.rotation.y = Math.PI;
         if (currentModel) modelGroup.remove(currentModel);
         currentModel = object;
         modelGroup.add(object);
-        infoEl.textContent = '모델이 자동으로 로드되었습니다. 주먹을 쥐어 회전/크기 조절하세요.';
       } catch (err) {
         console.error(err);
-        infoEl.textContent = '모델 로드에 실패했습니다.';
+        infoEl.textContent = '모델 로드 실패';
       }
     }
 
-    function computeHandRotation(landmarks) {
-      const wrist = landmarks[0];
-      const indexMcp = landmarks[5];
-      const pinkyMcp = landmarks[17];
-      const v1 = { x: indexMcp.x - wrist.x, y: indexMcp.y - wrist.y, z: indexMcp.z - wrist.z };
-      const v2 = { x: pinkyMcp.x - wrist.x, y: pinkyMcp.y - wrist.y, z: pinkyMcp.z - wrist.z };
-      const normal = {
-        x: v1.y * v2.z - v1.z * v2.y,
-        y: v1.z * v2.x - v1.x * v2.z,
-        z: v1.x * v2.y - v1.y * v2.x,
-      };
-      const length = Math.hypot(normal.x, normal.y, normal.z) + 1e-6;
-      normal.x /= length;
-      normal.y /= length;
-      normal.z /= length;
-      return { rotX: Math.asin(-normal.y), rotY: Math.atan2(normal.x, normal.z) };
+    function computeFaceYaw(landmarks) {
+      // Use cheek landmarks 234 (right) and 454 (left) to estimate yaw
+      const left = landmarks[234];
+      const right = landmarks[454];
+      // yaw angle: positive when turning left
+      return Math.atan2(left.z - right.z, right.x - left.x);
     }
-    function computeHandSize(landmarks) {
-      // Use distance between index MCP (5) and pinky MCP (17) as a proxy for hand width
-      const indexMcp = landmarks[5];
-      const pinkyMcp = landmarks[17];
-      const dx = pinkyMcp.x - indexMcp.x;
-      const dy = pinkyMcp.y - indexMcp.y;
+    function computeFaceWidth(landmarks) {
+      const left = landmarks[234];
+      const right = landmarks[454];
+      const dx = right.x - left.x;
+      const dy = right.y - left.y;
       return Math.hypot(dx, dy);
     }
-    function computeScaleFromSize(landmarks) {
-      const size = computeHandSize(landmarks);
-      return size * 8; // tune factor: bigger factor yields bigger scale
+    function computeScaleFromFace(landmarks) {
+      // Map face width to scale. Larger width -> closer -> bigger scale
+      const width = computeFaceWidth(landmarks);
+      return width * 8; // adjust factor
     }
-    function isFist(landmarks) {
-      let foldedCount = 0;
-      if (landmarks[8].y > landmarks[6].y) foldedCount++;
-      if (landmarks[12].y > landmarks[10].y) foldedCount++;
-      if (landmarks[16].y > landmarks[14].y) foldedCount++;
-      if (landmarks[20].y > landmarks[18].y) foldedCount++;
-      return foldedCount >= 3;
+    function isMouthClosed(landmarks) {
+      // Use lip landmarks 13 (upper) and 14 (lower)
+      const upper = landmarks[13];
+      const lower = landmarks[14];
+      const dist = Math.hypot(upper.x - lower.x, upper.y - lower.y);
+      // threshold: if distance small, mouth closed
+      return dist < 0.03;
     }
 
-    async function setupHandTracking() {
-      if (!window.Hands || !window.drawLandmarks || !window.drawConnectors) {
-        console.error('MediaPipe Hands not loaded');
+    async function setupFaceTracking() {
+      if (!window.FaceMesh || !window.drawLandmarks || !window.drawConnectors) {
+        console.error('MediaPipe Face Mesh not loaded');
         return;
       }
-      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-      hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.5 });
-      hands.onResults((results) => {
+      const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+      faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+      faceMesh.onResults((results) => {
         overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-          const landmarks = results.multiHandLandmarks[0];
-          drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
-          drawLandmarks(overlayCtx, landmarks, { color: '#FF0000', lineWidth: 2 });
-          if (isFist(landmarks)) {
-            const { rotX, rotY } = computeHandRotation(landmarks);
-            if (prevHandRotX !== null && prevHandRotY !== null) {
-              targetRotX += (rotX - prevHandRotX);
-              targetRotY += (rotY - prevHandRotY);
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const landmarks = results.multiFaceLandmarks[0];
+          // draw face mesh for visual feedback
+          drawConnectors(overlayCtx, landmarks, FACEMESH_TESSELATION, { color: '#00FF00', lineWidth: 1 });
+          drawLandmarks(overlayCtx, landmarks, { color: '#FF0000', lineWidth: 1 });
+          // update scale continuously
+          let newScale = computeScaleFromFace(landmarks);
+          newScale = Math.max(0.4, Math.min(3.0, newScale));
+          targetScale = newScale;
+          if (isMouthClosed(landmarks)) {
+            const yaw = computeFaceYaw(landmarks);
+            if (prevYaw !== null) {
+              targetRotY += (yaw - prevYaw);
             }
-            prevHandRotX = rotX;
-            prevHandRotY = rotY;
-            let newScale = computeScaleFromSize(landmarks);
-            newScale = Math.max(0.4, Math.min(3.0, newScale));
-            targetScale = newScale;
-            infoEl.textContent = '주먹을 쥐고 있어요: 회전/크기 조절 중...';
+            prevYaw = yaw;
+            infoEl.textContent = '입을 다물고 고개를 돌리면 회전/크기 조절됩니다.';
           } else {
-            prevHandRotX = null;
-            prevHandRotY = null;
-            infoEl.textContent = '손을 펴면 모델이 고정됩니다.';
+            // mouth open: stop updating rotation
+            prevYaw = null;
+            infoEl.textContent = '입을 벌리면 모델이 고정됩니다.';
           }
         } else {
-          prevHandRotX = null;
-          prevHandRotY = null;
-          infoEl.textContent = '손을 화면에 보여주세요.';
+          prevYaw = null;
+          infoEl.textContent = '얼굴을 카메라에 비춰 주세요.';
         }
       });
       async function processFrame() {
-        await hands.send({ image: videoElement });
+        await faceMesh.send({ image: videoElement });
         requestAnimationFrame(processFrame);
       }
       processFrame();
     }
+
     async function initCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         videoElement.srcObject = stream;
         await videoElement.play();
         await loadDefaultModel();
-        infoEl.textContent = '주먹을 쥐어 회전/크기 조절하세요.';
-        await setupHandTracking();
+        infoEl.textContent = '얼굴을 감지하면 회전/크기 조절 가능';
+        await setupFaceTracking();
       } catch (err) {
         console.error(err);
         infoEl.textContent = '카메라 접근을 허용해야 합니다.';
