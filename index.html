@@ -1,212 +1,57 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Hit Test Model Placement</title>
-  <!-- Import map for Three.js and examples modules -->
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.module.js",
-        "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/"
-      }
-    }
-  </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cross‑Platform AR Viewer</title>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <style>
-    html, body {
+    body {
       margin: 0;
-      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    model-viewer {
       width: 100%;
       height: 100%;
-      overflow: hidden;
-      background: #000;
-      font-family: sans-serif;
+      max-height: 90vh;
     }
     #info {
       position: absolute;
       top: 10px;
       left: 10px;
-      z-index: 10;
+      background: rgba(0,0,0,0.6);
       padding: 8px;
-      background: rgba(0,0,0,0.5);
-      color: white;
       border-radius: 4px;
+      font-size: 14px;
       max-width: 90vw;
     }
   </style>
 </head>
 <body>
-  <div id="info">터치하여 모델을 배치하고 이동할 수 있습니다. AR 모드는 HTTPS 환경 및 지원되는 모바일 브라우저에서만 동작합니다.</div>
-  <script type="module">
-    import * as THREE from 'three';
-    import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
-    import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-
-    let camera, scene, renderer;
-    let controller;
-    let reticle;
-    let hitTestSource = null;
-    let localSpace = null;
-    let model = null;
-    let modelLoaded = false;
-
-    init();
-
-    async function loadModel() {
-      // Load the default OBJ model with textures. You may adjust filenames as needed.
-      const objUrl = 'tripo_convert_82cea090-6813-43f2-a343-2a173d03f37d.obj';
-      const baseTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_0.jpg';
-      const normalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_2.jpg';
-      const metalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Metallic.jpg';
-      const roughTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Roughness.jpg';
-      try {
-        const objResponse = await fetch(objUrl);
-        const objText = await objResponse.text();
-        const loader = new OBJLoader();
-        const object = loader.parse(objText);
-        const textureLoader = new THREE.TextureLoader();
-        const [baseTex, normalTex, metalTex, roughTex] = await Promise.all([
-          textureLoader.loadAsync(baseTexUrl),
-          textureLoader.loadAsync(normalTexUrl),
-          textureLoader.loadAsync(metalTexUrl),
-          textureLoader.loadAsync(roughTexUrl)
-        ]);
-        [baseTex, normalTex, metalTex, roughTex].forEach(tex => {
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.encoding = THREE.sRGBEncoding;
-        });
-        object.traverse((child) => {
-          if (child.isMesh) {
-            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-            mat.map = baseTex;
-            mat.normalMap = normalTex;
-            mat.metalnessMap = metalTex;
-            mat.metalness = 1.0;
-            mat.roughnessMap = roughTex;
-            mat.roughness = 1.0;
-            mat.needsUpdate = true;
-            child.material = mat;
-          }
-        });
-        // Normalize scale and center
-        const box = new THREE.Box3().setFromObject(object);
-        const size = new THREE.Vector3();
-        box.getSize(size);
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const scaleFactor = maxDim > 0 ? 0.3 / maxDim : 1.0;
-        object.scale.setScalar(scaleFactor);
-        const center = new THREE.Vector3();
-        box.getCenter(center);
-        center.multiplyScalar(scaleFactor);
-        object.position.set(-center.x, -center.y, -center.z);
-        // Flip orientation around Y-axis so it faces the viewer
-        object.rotation.y = Math.PI;
-        model = object;
-        modelLoaded = true;
-        scene.add(model);
-        model.visible = false; // only show after placement
-      } catch (err) {
-        console.error(err);
-        document.getElementById('info').textContent = '모델 로드 실패: ' + err;
-      }
-    }
-
-    function init() {
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.xr.enabled = true;
-      document.body.appendChild(renderer.domElement);
-
-      scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
-      const directional = new THREE.DirectionalLight(0xffffff, 0.6);
-      directional.position.set(1, 1, 0.5).normalize();
-      scene.add(directional);
-
-      // Reticle for hit test result
-      const ringGeom = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
-      const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-      reticle = new THREE.Mesh(ringGeom, ringMat);
-      reticle.visible = false;
-      scene.add(reticle);
-
-      // Controller for select (tap) events
-      controller = renderer.xr.getController(0);
-      controller.addEventListener('select', onSelect);
-      scene.add(controller);
-
-      // ARButton to request AR session with hit-test feature
-      const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
-      document.body.appendChild(arButton);
-
-      // XR session event handlers
-      renderer.xr.addEventListener('sessionstart', onSessionStart);
-      renderer.xr.addEventListener('sessionend', onSessionEnd);
-
-      loadModel();
-
-      // Handle resizing
-      window.addEventListener('resize', onWindowResize);
-    }
-
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    function onSessionStart() {
-      const session = renderer.xr.getSession();
-      // Request reference space for hit test
-      session.requestReferenceSpace('viewer').then((refSpace) => {
-        localSpace = refSpace;
-        session.requestHitTestSource({ space: refSpace }).then((source) => {
-          hitTestSource = source;
-        });
-      });
-      session.addEventListener('end', onSessionEnd);
-      // Start animation loop
-      renderer.setAnimationLoop(render);
-    }
-
-    function onSessionEnd() {
-      hitTestSource = null;
-      localSpace = null;
-      renderer.setAnimationLoop(null);
-    }
-
-    function onSelect() {
-      // Place the model at the reticle position when user taps
-      if (reticle.visible && modelLoaded && model) {
-        model.visible = true;
-        // Copy reticle matrix to model
-        model.position.setFromMatrixPosition(reticle.matrix);
-        // Keep model upright: use reticle orientation but preserve up axis
-        const orient = new THREE.Quaternion().setFromRotationMatrix(reticle.matrix);
-        // Remove pitch/roll: we only care about yaw for upright orientation
-        const euler = new THREE.Euler().setFromQuaternion(orient, 'YXZ');
-        orient.setFromEuler(new THREE.Euler(0, euler.y, 0));
-        model.quaternion.copy(orient);
-      }
-    }
-
-    function render(timestamp, frame) {
-      if (frame && hitTestSource && localSpace) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
-        if (hitTestResults.length > 0) {
-          const hit = hitTestResults[0];
-          const pose = hit.getPose(renderer.xr.getReferenceSpace());
-          reticle.visible = true;
-          reticle.matrix.fromArray(pose.transform.matrix);
-        } else {
-          reticle.visible = false;
-        }
-      }
-      renderer.render(scene, camera);
-    }
-  </script>
+  <div id="info">
+    이 페이지는 <code>&lt;model-viewer&gt;</code>를 사용하여 iOS와 Android 모두에서 AR로 모델을 볼 수 있게 해줍니다. 
+    Android에서는 Scene Viewer, iOS에서는 AR Quick Look을 통해 실제 테이블 위에 모델을 배치할 수 있습니다. 
+    OBJ 파일은 glTF(.glb)로 변환되어야 하며, 필요하다면 별도로 변환하십시오.
+  </div>
+  <!-- Replace 'model.glb' with the path to your converted glTF/GLB model. 
+       The component will generate a USDZ automatically for iOS Quick Look if ios-src is not specified. -->
+  <model-viewer 
+    src="model.glb"
+    ar
+    ar-modes="scene-viewer quick-look"
+    camera-controls
+    environment-image="neutral"
+    exposure="1"
+    shadow-intensity="1"
+    auto-rotate
+    alt="3D model">
+  </model-viewer>
 </body>
 </html>
