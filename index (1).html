@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hand Controlled 3D Cube Demo</title>
+  <!-- Import Three.js from CDN -->
+  <script src="https://unpkg.com/three@0.150.0/build/three.min.js"></script>
+  <!-- Import MediaPipe Hands solution -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #f0f0f0;
+      font-family: sans-serif;
+    }
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #canvas3d {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    #videoElement {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 200px;
+      height: 150px;
+      z-index: 2;
+      border: 1px solid #ccc;
+    }
+    #info {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 14px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <video id="videoElement" autoplay muted playsinline></video>
+    <div id="info">준비 중… 카메라 권한을 허용하세요.</div>
+  </div>
+  <script>
+    // Basic Three.js setup
+    const container = document.getElementById('container');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.domElement.id = 'canvas3d';
+    container.appendChild(renderer.domElement);
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(0, 1, 1);
+    scene.add(directionalLight);
+
+    // Cube geometry
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({ color: 0x0088ff, roughness: 0.5, metalness: 0.2 });
+    const cube = new THREE.Mesh(geometry, material);
+    scene.add(cube);
+    camera.position.z = 4;
+
+    // Variables for controlling rotation and scale smoothing
+    let targetRotationX = 0;
+    let targetRotationY = 0;
+    let targetScale = 1;
+
+    // Render loop
+    function animate() {
+      requestAnimationFrame(animate);
+      // Smooth interpolation
+      cube.rotation.x += (targetRotationX - cube.rotation.x) * 0.2;
+      cube.rotation.y += (targetRotationY - cube.rotation.y) * 0.2;
+      cube.scale.setScalar(cube.scale.x + (targetScale - cube.scale.x) * 0.2);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Set up MediaPipe Hands
+    const videoElement = document.getElementById('videoElement');
+    const infoElement = document.getElementById('info');
+    const hands = new Hands({
+      locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+      },
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.5,
+    });
+
+    function onResults(results) {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        // Compute rotation from landmark positions
+        // Use wrist (0), index_mcp (5), and pinky_mcp (17) to create a plane orientation
+        const wrist = landmarks[0];
+        const indexMcp = landmarks[5];
+        const pinkyMcp = landmarks[17];
+        // Vector from wrist to index and wrist to pinky
+        const v1 = {
+          x: indexMcp.x - wrist.x,
+          y: indexMcp.y - wrist.y,
+          z: indexMcp.z - wrist.z,
+        };
+        const v2 = {
+          x: pinkyMcp.x - wrist.x,
+          y: pinkyMcp.y - wrist.y,
+          z: pinkyMcp.z - wrist.z,
+        };
+        // Cross product to get normal vector (hand facing direction)
+        const normal = {
+          x: v1.y * v2.z - v1.z * v2.y,
+          y: v1.z * v2.x - v1.x * v2.z,
+          z: v1.x * v2.y - v1.y * v2.x,
+        };
+        // Normalize normal vector
+        const nLength = Math.hypot(normal.x, normal.y, normal.z) + 1e-6;
+        normal.x /= nLength;
+        normal.y /= nLength;
+        normal.z /= nLength;
+        // Map the normal vector to rotation angles
+        targetRotationX = Math.asin(-normal.y);
+        targetRotationY = Math.atan2(normal.x, normal.z);
+        // Compute pinch distance between thumb tip (4) and index tip (8)
+        const thumbTip = landmarks[4];
+        const indexTip = landmarks[8];
+        const dist = Math.hypot(
+          thumbTip.x - indexTip.x,
+          thumbTip.y - indexTip.y,
+          thumbTip.z - indexTip.z
+        );
+        // Map distance to scale range [0.5, 2]
+        const newScale = THREE.MathUtils.clamp(2 - dist * 10, 0.5, 2);
+        targetScale = newScale;
+        infoElement.textContent = '';
+      } else {
+        infoElement.textContent = '손을 화면에 보여주세요.';
+      }
+    }
+    hands.onResults(onResults);
+
+    // Set up camera capture
+    const mpCamera = new Camera(videoElement, {
+      onFrame: async () => {
+        await hands.send({ image: videoElement });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    // Request camera access
+    mpCamera.start().then(() => {
+      infoElement.textContent = '손을 화면에 보여주세요.';
+    }).catch((err) => {
+      infoElement.textContent = '카메라 접근을 허용해야 합니다.';
+      console.error(err);
+    });
+
+    // Resize handling
+    window.addEventListener('resize', () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      renderer.setSize(width, height);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    });
+  </script>
+</body>
+</html>
