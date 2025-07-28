@@ -2,194 +2,333 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hand Controlled 3D Cube Demo</title>
-  <!-- Import Three.js from CDN -->
-  <script src="https://unpkg.com/three@0.150.0/build/three.min.js"></script>
-  <!-- Import MediaPipe Hands solution -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-  <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: #f0f0f0;
-      font-family: sans-serif;
+  <title>Hand‑Controlled AR Model Viewer (v8)</title>
+  <!-- Import map to resolve Three.js module specifiers -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.module.js",
+        "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/"
+      }
     }
-    #container {
+  </script>
+  <!-- MediaPipe Hands and drawing utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" defer></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #000;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    #ar-container {
       position: relative;
       width: 100vw;
       height: 100vh;
       overflow: hidden;
     }
-    #canvas3d {
+    #videoElement {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
+      object-fit: cover;
       z-index: 1;
     }
-    #videoElement {
+    #threeCanvas {
       position: absolute;
       top: 0;
       left: 0;
-      width: 200px;
-      height: 150px;
+      width: 100%;
+      height: 100%;
       z-index: 2;
-      border: 1px solid #ccc;
+      pointer-events: none;
+    }
+    #overlayCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3;
+      pointer-events: none;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 4;
+      background: rgba(0,0,0,0.5);
+      padding: 8px;
+      border-radius: 4px;
+      color: #fff;
+    }
+    #controls input[type=file] {
+      color: #fff;
+      margin-top: 4px;
     }
     #info {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      padding: 8px 12px;
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
+      margin-top: 6px;
       font-size: 14px;
-      border-radius: 4px;
     }
   </style>
 </head>
 <body>
-  <div id="container">
-    <video id="videoElement" autoplay muted playsinline></video>
-    <div id="info">준비 중… 카메라 권한을 허용하세요.</div>
+  <div id="ar-container">
+    <video id="videoElement" playsinline muted></video>
+    <canvas id="threeCanvas"></canvas>
+    <canvas id="overlayCanvas"></canvas>
+    <div id="controls">
+      <label for="filesInput">OBJ + 텍스쳐 선택 (여러 파일 가능):</label><br/>
+      <input type="file" id="filesInput" accept=".obj,.mtl,.jpg,.jpeg,.png" multiple />
+      <div id="info">카메라 접근을 허용해 주세요.</div>
+    </div>
   </div>
-  <script>
-    // Basic Three.js setup
-    const container = document.getElementById('container');
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  <script type="module">
+    import * as THREE from 'three';
+    import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+
+    // DOM elements
+    const videoElement = document.getElementById('videoElement');
+    const threeCanvas = document.getElementById('threeCanvas');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const filesInput = document.getElementById('filesInput');
+    const infoEl = document.getElementById('info');
+    const overlayCtx = overlayCanvas.getContext('2d');
+
+    // Three.js setup
+    const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.domElement.id = 'canvas3d';
-    container.appendChild(renderer.domElement);
-
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(0, 1, 1);
-    scene.add(directionalLight);
-
-    // Cube geometry
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const material = new THREE.MeshStandardMaterial({ color: 0x0088ff, roughness: 0.5, metalness: 0.2 });
-    const cube = new THREE.Mesh(geometry, material);
-    scene.add(cube);
-    camera.position.z = 4;
-
-    // Variables for controlling rotation and scale smoothing
-    let targetRotationX = 0;
-    let targetRotationY = 0;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 3;
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(1, 1, 2);
+    scene.add(dirLight);
+    const modelGroup = new THREE.Group();
+    scene.add(modelGroup);
+    let currentModel = null;
+    let targetRotX = 0;
+    let targetRotY = 0;
     let targetScale = 1;
+    // Previous values for relative control
+    let prevHandRotX = null;
+    let prevHandRotY = null;
 
-    // Render loop
     function animate() {
       requestAnimationFrame(animate);
-      // Smooth interpolation
-      cube.rotation.x += (targetRotationX - cube.rotation.x) * 0.2;
-      cube.rotation.y += (targetRotationY - cube.rotation.y) * 0.2;
-      cube.scale.setScalar(cube.scale.x + (targetScale - cube.scale.x) * 0.2);
+      modelGroup.rotation.x += (targetRotX - modelGroup.rotation.x) * 0.2;
+      modelGroup.rotation.y += (targetRotY - modelGroup.rotation.y) * 0.2;
+      const curScale = modelGroup.scale.x;
+      modelGroup.scale.setScalar(curScale + (targetScale - curScale) * 0.2);
       renderer.render(scene, camera);
     }
     animate();
 
-    // Set up MediaPipe Hands
-    const videoElement = document.getElementById('videoElement');
-    const infoElement = document.getElementById('info');
-    const hands = new Hands({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-      },
-    });
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.5,
+    function handleResize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      renderer.setSize(w, h);
+      overlayCanvas.width = w;
+      overlayCanvas.height = h;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    // Texture loader for local files
+    function loadTextureFromFile(file) {
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const loader = new THREE.TextureLoader();
+        loader.load(url, (texture) => {
+          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+          texture.encoding = THREE.sRGBEncoding;
+          resolve(texture);
+        });
+      });
+    }
+
+    filesInput.addEventListener('change', async (ev) => {
+      const files = Array.from(ev.target.files);
+      const objFile = files.find(f => f.name.toLowerCase().endsWith('.obj'));
+      if (!objFile) {
+        infoEl.textContent = 'OBJ 파일을 선택하세요.';
+        return;
+      }
+      let baseTexFile = null;
+      let normalTexFile = null;
+      let metalTexFile = null;
+      let roughTexFile = null;
+      for (const file of files) {
+        const name = file.name.toLowerCase();
+        if (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) {
+          if (name.includes('normal') && !normalTexFile) normalTexFile = file;
+          else if ((name.includes('metal') || name.includes('metallic')) && !metalTexFile) metalTexFile = file;
+          else if (name.includes('rough') && !roughTexFile) roughTexFile = file;
+          else if (!baseTexFile) baseTexFile = file;
+        }
+      }
+      // Read OBJ
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const contents = e.target.result;
+        const loader = new OBJLoader();
+        const object = loader.parse(contents);
+        // Load textures
+        const texPromises = [];
+        let baseTex = null;
+        let normalTex = null;
+        let metalTex = null;
+        let roughTex = null;
+        if (baseTexFile) texPromises.push(loadTextureFromFile(baseTexFile).then(t => baseTex = t));
+        if (normalTexFile) texPromises.push(loadTextureFromFile(normalTexFile).then(t => normalTex = t));
+        if (metalTexFile) texPromises.push(loadTextureFromFile(metalTexFile).then(t => metalTex = t));
+        if (roughTexFile) texPromises.push(loadTextureFromFile(roughTexFile).then(t => roughTex = t));
+        await Promise.all(texPromises);
+        // Apply material
+        object.traverse((child) => {
+          if (child.isMesh) {
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+            if (baseTex) mat.map = baseTex;
+            if (normalTex) mat.normalMap = normalTex;
+            if (metalTex) { mat.metalnessMap = metalTex; mat.metalness = 1.0; }
+            if (roughTex) { mat.roughnessMap = roughTex; mat.roughness = 1.0; }
+            mat.needsUpdate = true;
+            child.material = mat;
+          }
+        });
+        // Center and scale
+        const box = new THREE.Box3().setFromObject(object);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scaleFactor = maxDim > 0 ? 1.5 / maxDim : 1.0;
+        object.scale.setScalar(scaleFactor);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        center.multiplyScalar(scaleFactor);
+        object.position.set(-center.x, -center.y, -center.z);
+        // Default orientation: flip 180 degrees
+        object.rotation.y = Math.PI;
+        if (currentModel) modelGroup.remove(currentModel);
+        currentModel = object;
+        modelGroup.add(object);
+        infoEl.textContent = '모델이 로드되었습니다. 주먹을 쥐어 회전/크기 조절해 보세요!';
+      };
+      reader.readAsText(objFile);
     });
 
-    function onResults(results) {
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        // Compute rotation from landmark positions
-        // Use wrist (0), index_mcp (5), and pinky_mcp (17) to create a plane orientation
-        const wrist = landmarks[0];
-        const indexMcp = landmarks[5];
-        const pinkyMcp = landmarks[17];
-        // Vector from wrist to index and wrist to pinky
-        const v1 = {
-          x: indexMcp.x - wrist.x,
-          y: indexMcp.y - wrist.y,
-          z: indexMcp.z - wrist.z,
-        };
-        const v2 = {
-          x: pinkyMcp.x - wrist.x,
-          y: pinkyMcp.y - wrist.y,
-          z: pinkyMcp.z - wrist.z,
-        };
-        // Cross product to get normal vector (hand facing direction)
-        const normal = {
-          x: v1.y * v2.z - v1.z * v2.y,
-          y: v1.z * v2.x - v1.x * v2.z,
-          z: v1.x * v2.y - v1.y * v2.x,
-        };
-        // Normalize normal vector
-        const nLength = Math.hypot(normal.x, normal.y, normal.z) + 1e-6;
-        normal.x /= nLength;
-        normal.y /= nLength;
-        normal.z /= nLength;
-        // Map the normal vector to rotation angles
-        targetRotationX = Math.asin(-normal.y);
-        targetRotationY = Math.atan2(normal.x, normal.z);
-        // Compute pinch distance between thumb tip (4) and index tip (8)
-        const thumbTip = landmarks[4];
-        const indexTip = landmarks[8];
-        const dist = Math.hypot(
-          thumbTip.x - indexTip.x,
-          thumbTip.y - indexTip.y,
-          thumbTip.z - indexTip.z
-        );
-        // Map distance to scale range [0.5, 2]
-        const newScale = THREE.MathUtils.clamp(2 - dist * 10, 0.5, 2);
-        targetScale = newScale;
-        infoElement.textContent = '';
-      } else {
-        infoElement.textContent = '손을 화면에 보여주세요.';
+    function computeHandRotation(landmarks) {
+      const wrist = landmarks[0];
+      const indexMcp = landmarks[5];
+      const pinkyMcp = landmarks[17];
+      const v1 = { x: indexMcp.x - wrist.x, y: indexMcp.y - wrist.y, z: indexMcp.z - wrist.z };
+      const v2 = { x: pinkyMcp.x - wrist.x, y: pinkyMcp.y - wrist.y, z: pinkyMcp.z - wrist.z };
+      const normal = {
+        x: v1.y * v2.z - v1.z * v2.y,
+        y: v1.z * v2.x - v1.x * v2.z,
+        z: v1.x * v2.y - v1.y * v2.x,
+      };
+      const length = Math.hypot(normal.x, normal.y, normal.z) + 1e-6;
+      normal.x /= length;
+      normal.y /= length;
+      normal.z /= length;
+      return { rotX: Math.asin(-normal.y), rotY: Math.atan2(normal.x, normal.z) };
+    }
+    function computeHandSize(landmarks) {
+      // Use distance between index MCP (5) and pinky MCP (17) as a proxy for hand width
+      const indexMcp = landmarks[5];
+      const pinkyMcp = landmarks[17];
+      const dx = pinkyMcp.x - indexMcp.x;
+      const dy = pinkyMcp.y - indexMcp.y;
+      return Math.hypot(dx, dy);
+    }
+    function computeScaleFromSize(landmarks) {
+      const size = computeHandSize(landmarks);
+      return size * 8; // tune factor: bigger factor yields bigger scale
+    }
+    function isFist(landmarks) {
+      // Determine if most fingers are folded; check index, middle, ring, pinky
+      let foldedCount = 0;
+      // index finger: tip 8, pip 6
+      if (landmarks[8].y > landmarks[6].y) foldedCount++;
+      // middle finger: tip 12, pip 10
+      if (landmarks[12].y > landmarks[10].y) foldedCount++;
+      // ring finger: tip 16, pip 14
+      if (landmarks[16].y > landmarks[14].y) foldedCount++;
+      // pinky: tip 20, pip 18
+      if (landmarks[20].y > landmarks[18].y) foldedCount++;
+      return foldedCount >= 3; // treat as fist if 3 or more fingers folded
+    }
+
+    async function setupHandTracking() {
+      if (!window.Hands || !window.drawLandmarks || !window.drawConnectors) {
+        console.error('MediaPipe Hands not loaded');
+        return;
+      }
+      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.5 });
+      hands.onResults((results) => {
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+          const landmarks = results.multiHandLandmarks[0];
+          drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
+          drawLandmarks(overlayCtx, landmarks, { color: '#FF0000', lineWidth: 2 });
+          if (isFist(landmarks)) {
+            // Update rotation
+            const { rotX, rotY } = computeHandRotation(landmarks);
+            if (prevHandRotX !== null && prevHandRotY !== null) {
+              targetRotX += (rotX - prevHandRotX);
+              targetRotY += (rotY - prevHandRotY);
+            }
+            prevHandRotX = rotX;
+            prevHandRotY = rotY;
+            // Update scale based on hand size only while fist is held
+            let newScale = computeScaleFromSize(landmarks);
+            newScale = Math.max(0.4, Math.min(3.0, newScale));
+            targetScale = newScale;
+            infoEl.textContent = '주먹을 쥐고 있어요: 회전/크기 조절 중...';
+          } else {
+            // Not fist: stop updating rotation/scale, reset prev rotation values
+            prevHandRotX = null;
+            prevHandRotY = null;
+            infoEl.textContent = '손을 펴면 모델이 고정됩니다.';
+          }
+        } else {
+          // No hand: reset
+          prevHandRotX = null;
+          prevHandRotY = null;
+          infoEl.textContent = '손을 화면에 보여주세요.';
+        }
+      });
+      async function processFrame() {
+        await hands.send({ image: videoElement });
+        requestAnimationFrame(processFrame);
+      }
+      processFrame();
+    }
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        infoEl.textContent = '모델을 로드한 뒤 주먹으로 회전/크기 조절하세요.';
+        await setupHandTracking();
+      } catch (err) {
+        console.error(err);
+        infoEl.textContent = '카메라 접근을 허용해야 합니다.';
       }
     }
-    hands.onResults(onResults);
-
-    // Set up camera capture
-    const mpCamera = new Camera(videoElement, {
-      onFrame: async () => {
-        await hands.send({ image: videoElement });
-      },
-      width: 640,
-      height: 480,
-    });
-
-    // Request camera access
-    mpCamera.start().then(() => {
-      infoElement.textContent = '손을 화면에 보여주세요.';
-    }).catch((err) => {
-      infoElement.textContent = '카메라 접근을 허용해야 합니다.';
-      console.error(err);
-    });
-
-    // Resize handling
-    window.addEventListener('resize', () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      renderer.setSize(width, height);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-    });
+    window.addEventListener('load', initCamera);
   </script>
 </body>
 </html>
