@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Touch & Fist Model Viewer</title>
-  <!-- Import map to resolve Three.js module specifiers -->
+  <title>AR Hit Test Model Placement</title>
+  <!-- Import map for Three.js and examples modules -->
   <script type="importmap">
     {
       "imports": {
@@ -13,160 +13,54 @@
       }
     }
   </script>
-  <!-- MediaPipe Hands and drawing utils -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" defer></script>
   <style>
     html, body {
       margin: 0;
       padding: 0;
+      width: 100%;
       height: 100%;
+      overflow: hidden;
       background: #000;
       font-family: sans-serif;
-      overflow: hidden;
-      touch-action: none; /* prevent page scrolling on touch devices */
     }
-    #ar-container {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-    }
-    #videoElement {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      z-index: 1;
-    }
-    #overlayCanvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 2;
-      pointer-events: none;
-    }
-    #threeCanvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 3;
-      pointer-events: none;
-    }
-    #controls {
+    #info {
       position: absolute;
       top: 10px;
       left: 10px;
-      z-index: 4;
-      background: rgba(0, 0, 0, 0.5);
+      z-index: 10;
       padding: 8px;
+      background: rgba(0,0,0,0.5);
+      color: white;
       border-radius: 4px;
-      color: #fff;
       max-width: 90vw;
-    }
-    #info {
-      margin-top: 4px;
-      font-size: 14px;
     }
   </style>
 </head>
 <body>
-  <div id="ar-container">
-    <video id="videoElement" playsinline muted></video>
-    <canvas id="overlayCanvas"></canvas>
-    <canvas id="threeCanvas"></canvas>
-    <div id="controls">
-      <div id="info">카메라 로딩 중...</div>
-    </div>
-  </div>
+  <div id="info">터치하여 모델을 배치하고 이동할 수 있습니다. AR 모드는 HTTPS 환경 및 지원되는 모바일 브라우저에서만 동작합니다.</div>
   <script type="module">
     import * as THREE from 'three';
+    import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
     import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 
-    // DOM elements
-    const videoElement = document.getElementById('videoElement');
-    const overlayCanvas = document.getElementById('overlayCanvas');
-    const threeCanvas = document.getElementById('threeCanvas');
-    const infoEl = document.getElementById('info');
-    const overlayCtx = overlayCanvas.getContext('2d');
+    let camera, scene, renderer;
+    let controller;
+    let reticle;
+    let hitTestSource = null;
+    let localSpace = null;
+    let model = null;
+    let modelLoaded = false;
 
-    // Three.js scene setup
-    const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = 3;
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(1, 1, 2);
-    scene.add(dirLight);
-    // Add a plane to visually anchor placed object (optional)
-    const planeGeo = new THREE.PlaneGeometry(10, 10);
-    const planeMat = new THREE.MeshBasicMaterial({ color: 0x222222, side: THREE.DoubleSide });
-    const planeMesh = new THREE.Mesh(planeGeo, planeMat);
-    planeMesh.rotation.x = -Math.PI / 2;
-    planeMesh.position.y = -1; // plane height
-    scene.add(planeMesh);
+    init();
 
-    const modelGroup = new THREE.Group();
-    scene.add(modelGroup);
-    let currentModel = null;
-
-    // Target values for smoothing
-    let targetRotX = 0;
-    let targetRotY = 0;
-    let targetScale = 1;
-    let targetPos = new THREE.Vector3(0, 0, 0);
-    let placed = false;
-
-    // Variables for touch handling
-    const pointers = new Map();
-    let baseRotation = { x: 0, y: 0 };
-    let basePos = new THREE.Vector3();
-    let baseScale = 1;
-    let baseDistance = 0;
-    let baseCenter = { x: 0, y: 0 };
-
-    function animate() {
-      requestAnimationFrame(animate);
-      // Smooth rotation
-      modelGroup.rotation.x += (targetRotX - modelGroup.rotation.x) * 0.2;
-      modelGroup.rotation.y += (targetRotY - modelGroup.rotation.y) * 0.2;
-      // Smooth scale
-      const curScale = modelGroup.scale.x;
-      modelGroup.scale.setScalar(curScale + (targetScale - curScale) * 0.2);
-      // Smooth position
-      modelGroup.position.lerp(targetPos, 0.2);
-      renderer.render(scene, camera);
-    }
-    animate();
-
-    function handleResize() {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      renderer.setSize(w, h);
-      overlayCanvas.width = w;
-      overlayCanvas.height = h;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    }
-    window.addEventListener('resize', handleResize);
-    handleResize();
-
-    async function loadDefaultModel() {
+    async function loadModel() {
+      // Load the default OBJ model with textures. You may adjust filenames as needed.
+      const objUrl = 'tripo_convert_82cea090-6813-43f2-a343-2a173d03f37d.obj';
+      const baseTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_0.jpg';
+      const normalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_2.jpg';
+      const metalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Metallic.jpg';
+      const roughTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Roughness.jpg';
       try {
-        const objUrl = 'tripo_convert_82cea090-6813-43f2-a343-2a173d03f37d.obj';
-        const baseTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_0.jpg';
-        const normalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_2.jpg';
-        const metalTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Metallic.jpg';
-        const roughTexUrl = 'tripo_image_82cea090-6813-43f2-a343-2a173d03f37d_Roughness.jpg';
         const objResponse = await fetch(objUrl);
         const objText = await objResponse.text();
         const loader = new OBJLoader();
@@ -200,194 +94,119 @@
         const size = new THREE.Vector3();
         box.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z);
-        const scaleFactor = maxDim > 0 ? 1.5 / maxDim : 1.0;
+        const scaleFactor = maxDim > 0 ? 0.3 / maxDim : 1.0;
         object.scale.setScalar(scaleFactor);
         const center = new THREE.Vector3();
         box.getCenter(center);
         center.multiplyScalar(scaleFactor);
         object.position.set(-center.x, -center.y, -center.z);
-        // Flip orientation around Y-axis
+        // Flip orientation around Y-axis so it faces the viewer
         object.rotation.y = Math.PI;
-        if (currentModel) modelGroup.remove(currentModel);
-        currentModel = object;
-        modelGroup.add(object);
-        // Reset transforms
-        targetScale = 1;
-        targetRotX = 0;
-        targetRotY = 0;
-        targetPos.set(0, 0, 0);
+        model = object;
+        modelLoaded = true;
+        scene.add(model);
+        model.visible = false; // only show after placement
       } catch (err) {
         console.error(err);
-        infoEl.textContent = '모델 로드 실패';
+        document.getElementById('info').textContent = '모델 로드 실패: ' + err;
       }
     }
 
-    // ------ Pointer / Touch controls ------
-    function distanceBetween(p1, p2) {
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      return Math.hypot(dx, dy);
+    function init() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
+      const directional = new THREE.DirectionalLight(0xffffff, 0.6);
+      directional.position.set(1, 1, 0.5).normalize();
+      scene.add(directional);
+
+      // Reticle for hit test result
+      const ringGeom = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+      reticle = new THREE.Mesh(ringGeom, ringMat);
+      reticle.visible = false;
+      scene.add(reticle);
+
+      // Controller for select (tap) events
+      controller = renderer.xr.getController(0);
+      controller.addEventListener('select', onSelect);
+      scene.add(controller);
+
+      // ARButton to request AR session with hit-test feature
+      const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+      document.body.appendChild(arButton);
+
+      // XR session event handlers
+      renderer.xr.addEventListener('sessionstart', onSessionStart);
+      renderer.xr.addEventListener('sessionend', onSessionEnd);
+
+      loadModel();
+
+      // Handle resizing
+      window.addEventListener('resize', onWindowResize);
     }
-    function updateWorldDimensions() {
-      // Compute world width/height at depth of model for translation mapping
-      const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
-      const dist = Math.abs(camera.position.z - modelGroup.position.z);
-      const worldHeight = 2 * Math.tan(halfFov) * dist;
-      const worldWidth = worldHeight * camera.aspect;
-      return { worldWidth, worldHeight };
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
     }
-    threeCanvas.addEventListener('pointerdown', (event) => {
-      threeCanvas.setPointerCapture(event.pointerId);
-      pointers.set(event.pointerId, {
-        startX: event.clientX,
-        startY: event.clientY,
-        lastX: event.clientX,
-        lastY: event.clientY
+
+    function onSessionStart() {
+      const session = renderer.xr.getSession();
+      // Request reference space for hit test
+      session.requestReferenceSpace('viewer').then((refSpace) => {
+        localSpace = refSpace;
+        session.requestHitTestSource({ space: refSpace }).then((source) => {
+          hitTestSource = source;
+        });
       });
-      if (pointers.size === 1) {
-        // store base rotation
-        baseRotation.x = targetRotX;
-        baseRotation.y = targetRotY;
-      } else if (pointers.size === 2) {
-        // store base scale, position and distance for pinch/translate
-        const iter = pointers.values();
-        const p1 = iter.next().value;
-        const p2 = iter.next().value;
-        baseDistance = distanceBetween({ x: p1.lastX, y: p1.lastY }, { x: p2.lastX, y: p2.lastY });
-        baseScale = targetScale;
-        basePos.copy(targetPos);
-        baseCenter.x = (p1.lastX + p2.lastX) / 2;
-        baseCenter.y = (p1.lastY + p2.lastY) / 2;
-      }
-    });
-    threeCanvas.addEventListener('pointermove', (event) => {
-      if (!pointers.has(event.pointerId)) return;
-      const pointer = pointers.get(event.pointerId);
-      pointer.lastX = event.clientX;
-      pointer.lastY = event.clientY;
-      if (pointers.size === 1) {
-        const deltaX = pointer.lastX - pointer.startX;
-        const deltaY = pointer.lastY - pointer.startY;
-        // Sensitivity factors
-        const rotSpeed = 0.005;
-        targetRotY = baseRotation.y + deltaX * rotSpeed;
-        targetRotX = baseRotation.x + deltaY * rotSpeed;
-      } else if (pointers.size === 2) {
-        const iter = pointers.values();
-        const p1 = iter.next().value;
-        const p2 = iter.next().value;
-        const currDist = distanceBetween({ x: p1.lastX, y: p1.lastY }, { x: p2.lastX, y: p2.lastY });
-        const scaleRatio = currDist / baseDistance;
-        const newScale = baseScale * scaleRatio;
-        targetScale = Math.max(0.4, Math.min(3.0, newScale));
-        // translation: compute center movement
-        const currCenterX = (p1.lastX + p2.lastX) / 2;
-        const currCenterY = (p1.lastY + p2.lastY) / 2;
-        const { worldWidth, worldHeight } = updateWorldDimensions();
-        const deltaCenterX = (currCenterX - baseCenter.x) / threeCanvas.clientWidth * worldWidth;
-        const deltaCenterY = (currCenterY - baseCenter.y) / threeCanvas.clientHeight * worldHeight;
-        // update target position: invert Y because screen Y increases downward
-        targetPos.x = basePos.x + deltaCenterX;
-        if (placed) {
-          // keep y fixed on plane
-          targetPos.y = -1;
-        } else {
-          targetPos.y = basePos.y - deltaCenterY;
-        }
-        targetPos.z = basePos.z;
-      }
-    });
-    function endPointer(event) {
-      if (pointers.has(event.pointerId)) {
-        pointers.delete(event.pointerId);
-        if (pointers.size === 1) {
-          // Reset baseRotation/translation for remaining pointer
-          const remaining = pointers.values().next().value;
-          remaining.startX = remaining.lastX;
-          remaining.startY = remaining.lastY;
-          baseRotation.x = targetRotX;
-          baseRotation.y = targetRotY;
-        }
-      }
-    }
-    ['pointerup', 'pointercancel', 'pointerout', 'pointerleave'].forEach(evt => {
-      threeCanvas.addEventListener(evt, endPointer);
-    });
-
-    // ------ Hand tracking for fist placement ------
-    function isFistLandmarks(landmarks) {
-      // Determine if hand is a fist: finger tips below corresponding PIP joints
-      const fingerTips = [8, 12, 16, 20];
-      const pipJoints = [6, 10, 14, 18];
-      for (let i = 0; i < fingerTips.length; i++) {
-        const tip = landmarks[fingerTips[i]];
-        const joint = landmarks[pipJoints[i]];
-        if (tip.y < joint.y) {
-          // finger is not curled
-          return false;
-        }
-      }
-      return true;
-    }
-    async function setupHandTracking() {
-      if (!window.Hands || !window.drawLandmarks || !window.drawConnectors) {
-        console.error('MediaPipe Hands not loaded');
-        return;
-      }
-      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-      hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-      hands.onResults((results) => {
-        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-          const landmarks = results.multiHandLandmarks[0];
-          // Draw landmarks with semi-transparent green for debug
-          overlayCtx.save();
-          overlayCtx.globalAlpha = 0.4;
-          drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
-          drawLandmarks(overlayCtx, landmarks, { color: '#00FF00', lineWidth: 1 });
-          overlayCtx.restore();
-          if (isFistLandmarks(landmarks)) {
-            if (!placed) {
-              infoEl.textContent = '주먹 감지: 객체를 평면에 배치했습니다.';
-            }
-            placed = true;
-            targetPos.y = -1; // plane height
-          } else {
-            if (placed) {
-              infoEl.textContent = '주먹을 풀었습니다. 손가락으로 모델을 조작하세요.';
-            }
-            placed = false;
-          }
-        } else {
-          // no hand
-          if (placed) {
-            infoEl.textContent = '손이 사라졌습니다.';
-          }
-          placed = false;
-        }
-      });
-      async function processHands() {
-        await hands.send({ image: videoElement });
-        requestAnimationFrame(processHands);
-      }
-      processHands();
+      session.addEventListener('end', onSessionEnd);
+      // Start animation loop
+      renderer.setAnimationLoop(render);
     }
 
-    // ------ Initialize camera and everything ------
-    async function init() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoElement.srcObject = stream;
-        await videoElement.play();
-        await loadDefaultModel();
-        infoEl.textContent = '카메라 활성화됨. 손가락으로 모델을 회전/이동/확대할 수 있습니다. 주먹을 쥐어 평면에 배치하세요.';
-        await setupHandTracking();
-      } catch (err) {
-        console.error(err);
-        infoEl.textContent = '카메라 접근을 허용해야 합니다.';
+    function onSessionEnd() {
+      hitTestSource = null;
+      localSpace = null;
+      renderer.setAnimationLoop(null);
+    }
+
+    function onSelect() {
+      // Place the model at the reticle position when user taps
+      if (reticle.visible && modelLoaded && model) {
+        model.visible = true;
+        // Copy reticle matrix to model
+        model.position.setFromMatrixPosition(reticle.matrix);
+        // Keep model upright: use reticle orientation but preserve up axis
+        const orient = new THREE.Quaternion().setFromRotationMatrix(reticle.matrix);
+        // Remove pitch/roll: we only care about yaw for upright orientation
+        const euler = new THREE.Euler().setFromQuaternion(orient, 'YXZ');
+        orient.setFromEuler(new THREE.Euler(0, euler.y, 0));
+        model.quaternion.copy(orient);
       }
     }
-    window.addEventListener('load', init);
+
+    function render(timestamp, frame) {
+      if (frame && hitTestSource && localSpace) {
+        const hitTestResults = frame.getHitTestResults(hitTestSource);
+        if (hitTestResults.length > 0) {
+          const hit = hitTestResults[0];
+          const pose = hit.getPose(renderer.xr.getReferenceSpace());
+          reticle.visible = true;
+          reticle.matrix.fromArray(pose.transform.matrix);
+        } else {
+          reticle.visible = false;
+        }
+      }
+      renderer.render(scene, camera);
+    }
   </script>
 </body>
 </html>
