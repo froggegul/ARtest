@@ -1,57 +1,55 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cross‑Platform AR Viewer</title>
+  <title>모바일 AR 데모 – 모델 뷰어</title>
+  <!-- model-viewer 라이브러리 로드 -->
   <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <style>
     body {
       margin: 0;
-      background: #000;
-      color: #fff;
       font-family: sans-serif;
+      background-color: #000;
+      color: #fff;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
       height: 100vh;
     }
+    #info {
+      padding: 1rem;
+      font-size: 14px;
+    }
     model-viewer {
+      flex: 1;
       width: 100%;
       height: 100%;
-      max-height: 90vh;
-    }
-    #info {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(0,0,0,0.6);
-      padding: 8px;
-      border-radius: 4px;
-      font-size: 14px;
-      max-width: 90vw;
     }
   </style>
 </head>
 <body>
   <div id="info">
-    이 페이지는 <code>&lt;model-viewer&gt;</code>를 사용하여 iOS와 Android 모두에서 AR로 모델을 볼 수 있게 해줍니다. 
-    Android에서는 Scene Viewer, iOS에서는 AR Quick Look을 통해 실제 테이블 위에 모델을 배치할 수 있습니다. 
-    OBJ 파일은 glTF(.glb)로 변환되어야 하며, 필요하다면 별도로 변환하십시오.
+    이 페이지는 iOS와 Android 모두에서 작동하는 AR 데모입니다. 아래의 3D 모델을 선택하여 AR로 배치할 수 있습니다. iOS에서는 AR Quick Look, Android에서는 Scene Viewer가 사용됩니다.
   </div>
-  <!-- Replace 'model.glb' with the path to your converted glTF/GLB model. 
-       The component will generate a USDZ automatically for iOS Quick Look if ios-src is not specified. -->
+  <!--
+    공유 자산 폴더에서 제공되는 예제 glb 모델을 사용합니다. 
+    이 파일을 사용자 정의 모델로 교체하려면 src 속성을 해당 glb 파일 경로로 변경하세요.
+    ios-src 속성을 지정하지 않으면 Quick Look에서 자동으로 USDZ를 생성합니다.
+  -->
   <model-viewer 
-    src="model.glb"
+    id="mv"
+    src="https://modelviewer.dev/shared-assets/models/Astronaut.glb"
+    alt="Astronaut"
     ar
     ar-modes="scene-viewer quick-look"
     camera-controls
-    environment-image="neutral"
-    exposure="1"
     shadow-intensity="1"
-    auto-rotate
-    alt="3D model">
+    environment-image="neutral"
+    auto-rotate>
+    <!-- 사용자 정의 AR 버튼 예시 -->
+    <button slot="ar-button" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:0.5rem 1rem;font-size:16px;background:#fff;color:#007AFF;border-radius:4px;border:none;">
+      AR로 보기
+    </button>
   </model-viewer>
 </body>
 </html>
