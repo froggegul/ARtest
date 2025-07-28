@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Model Viewer — Face Control (v4)</title>
+  <title>AR Model Viewer — Face Control (v5)</title>
   <!-- Import map to resolve Three.js module specifiers -->
   <script type="importmap">
     {
@@ -113,6 +113,10 @@
     const FIXED_ROT_Z = 0;
     let targetScale = 1;
     let prevYaw = null;
+    // Variables to handle relative scaling based on initial mouth close event
+    let scalingActive = false;
+    let referenceFaceWidth = null;
+    let referenceTargetScale = null;
 
     function animate() {
       requestAnimationFrame(animate);
@@ -204,9 +208,9 @@
       const dy = right.y - left.y;
       return Math.hypot(dx, dy);
     }
-    function computeScaleFromFace(landmarks) {
-      const width = computeFaceWidth(landmarks);
-      return width * 8;
+    function computeScaleFactor(landmarks) {
+      // compute width-based scale; relative scaling handled separately
+      return computeFaceWidth(landmarks);
     }
     function isMouthClosed(landmarks) {
       const upper = landmarks[13];
@@ -228,27 +232,42 @@
           const landmarks = results.multiFaceLandmarks[0];
           // Draw only the lips region with semi-transparent red and skip drawing full face mesh
           overlayCtx.save();
-          // 50% opacity for the lips lines
           overlayCtx.globalAlpha = 0.5;
           if (typeof FACEMESH_LIPS !== 'undefined') {
             drawConnectors(overlayCtx, landmarks, FACEMESH_LIPS, { color: '#FF4444', lineWidth: 2 });
           }
           overlayCtx.restore();
-          if (isMouthClosed(landmarks)) {
+
+          const mouthClosed = isMouthClosed(landmarks);
+          if (mouthClosed) {
+            // Update rotation
             const yaw = computeFaceYaw(landmarks);
             if (prevYaw !== null) {
               targetRotY += (yaw - prevYaw);
             }
             prevYaw = yaw;
-            let newScale = computeScaleFromFace(landmarks);
+            // Handle scaling relative to first closed frame
+            const currentWidth = computeFaceWidth(landmarks);
+            if (!scalingActive) {
+              // Start scaling: store reference width and scale
+              scalingActive = true;
+              referenceFaceWidth = currentWidth;
+              referenceTargetScale = targetScale;
+            }
+            // Calculate scale relative to reference
+            let newScale = referenceTargetScale * (currentWidth / referenceFaceWidth);
+            // Clamp scale to reasonable range
             newScale = Math.max(0.4, Math.min(3.0, newScale));
             targetScale = newScale;
             infoEl.textContent = '입을 다문 상태: 회전/크기 조절 중...';
           } else {
+            // Mouth open: stop updating but do not reset scale
+            scalingActive = false;
             prevYaw = null;
             infoEl.textContent = '입을 벌리면 모델이 고정됩니다.';
           }
         } else {
+          scalingActive = false;
           prevYaw = null;
           infoEl.textContent = '얼굴을 카메라에 비춰 주세요.';
         }
